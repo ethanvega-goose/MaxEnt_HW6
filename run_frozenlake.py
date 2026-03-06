@@ -35,13 +35,39 @@ def generate_sample_trajectories(env, expert_policy, num_trajectories, len_traje
         
     return np.array(trajs, dtype=int) 
 
+# 2. The Statistical Evaluator
+def evaluate_policy(env, policy, num_episodes=100):
+    """
+    Runs the agent through the environment for a set number of episodes without
+    rendering the graphics. It returns the exact percentage of successful runs.
+    """
+    wins = 0
+    
+    for _ in range(num_episodes):
+        obs, _ = env.reset()
+        done = False
+        
+        while not done:
+            # The agent dynamically chooses its best action
+            action = np.argmax(policy[obs])
+            obs, reward, terminated, truncated, _ = env.step(action)
+            
+            done = terminated or truncated
+            
+            # In FrozenLake, reaching the goal gives a reward of 1.0
+            if reward > 0:
+                wins += 1
+                
+    win_rate = (wins / num_episodes) * 100
+    return win_rate
+
 if __name__ == "__main__" :
     # --- Parameters ---
     num_trajectories = 50 
     len_trajectory = 40   
-    n_epochs = 100
+    n_epochs = 500
     discount = 0.9
-    lr = 0.1
+    lr = 0.01
 
     print("Initializing 8x8 Slippery Environment...")
     gym_env = gym.make('FrozenLake-v1', map_name="8x8", is_slippery=True, render_mode="human")
@@ -70,6 +96,13 @@ if __name__ == "__main__" :
     print("Calculating True Expert Policy...")
     expert_policy = value_iteration(discount, gym_env, true_rewards)
 
+    # --- NEW: Test the Expert's Win Rate ---
+    print("Evaluating True Expert Performance...")
+    # Using an invisible environment specifically for fast evaluation
+    eval_env = gym.make('FrozenLake-v1', map_name="8x8", is_slippery=True)
+    expert_win_rate = evaluate_policy(eval_env, expert_policy, num_episodes=1000)
+    print(f"--> True Expert Win Rate on Slippery Ice: {expert_win_rate:.1f}%\n")
+
     # --- Generate Trajectories and Features ---
     print("Generating Expert Data...")
     trajs = generate_sample_trajectories(gym_env, expert_policy, num_trajectories, len_trajectory)
@@ -78,6 +111,7 @@ if __name__ == "__main__" :
     # --- Initialize and Train MaxEnt IRL ---
     print("\nStarting Maximum Entropy IRL Training...")
     me = MaximumEntropy(gym_env, trajs, features, lr, discount)
+    
     # Train and get the gradient history
     learned_rewards_flat, grad_history = me.train(n_epochs, plot=False)
     learned_rewards = learned_rewards_flat.reshape(gym_env.grid_size, gym_env.grid_size)
@@ -89,7 +123,7 @@ if __name__ == "__main__" :
     plt.xlabel("Epoch")
     plt.ylabel("Gradient Norm (Expert vs. Agent Difference)")
     plt.grid(True)
-    plt.show()
+    plt.show(block=False)
 
     # --- Plotting the Grids ---
     true_rewards = true_rewards.reshape(gym_env.grid_size, gym_env.grid_size)
@@ -107,28 +141,22 @@ if __name__ == "__main__" :
     plt.title("Learned Reward (MaxEnt IRL)")
     plt.gca().invert_yaxis()
     
-    print("Close the heatmap plot window to watch the AI test its learned reward map!")
+    print("Close the heatmap plot window to see the final statistical proof!")
     plt.show()
 
-    # --- THE VISUAL PROOF ---
-    print("\n=== VISUAL PROOF: Testing the Learned Reward ===")
+    # --- THE STATISTICAL PROOF ---
+    print("\n=== STATISTICAL PROOF: Testing the Learned Reward ===")
     
     # Calculate the final policy based ONLY on our learned breadcrumb trail
     final_policy = value_iteration(discount, gym_env, learned_rewards.flatten())
     
-    obs, _ = gym_env.reset()
-    done = False
+    # Run 1,000 fast, invisible games to get a true statistical win rate
+    ai_win_rate = evaluate_policy(eval_env, final_policy, num_episodes=1000)
     
-    print("Agent is now playing based on the learned reward function...")
-    while not done:
-        best_action = np.argmax(final_policy[obs]) 
-        
-        obs, r, terminated, truncated, _ = gym_env.step(best_action)
-        gym_env.render() 
-        
-        done = terminated or truncated
-        
-    if r > 0:
-        print("SUCCESS! The agent reached the goal using the inferred reward function!")
+    print(f"Target to Beat (Expert): {expert_win_rate:.1f}%")
+    print(f"MaxEnt AI Win Rate:      {ai_win_rate:.1f}%")
+    
+    if ai_win_rate >= (expert_win_rate - 5.0):
+        print("\nSUCCESS! The AI's performance statistically matches the Expert!")
     else:
-        print("FAILED. The agent did not reach the goal.")
+        print("\nFAILED. The AI needs more training data or epochs.")
